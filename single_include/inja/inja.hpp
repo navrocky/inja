@@ -379,6 +379,8 @@ inline void replace_substring(std::string& s, const std::string& f, const std::s
 
 namespace inja {
 
+struct Template;
+
 class NodeVisitor;
 class BlockNode;
 class TextNode;
@@ -396,6 +398,8 @@ class IncludeStatementNode;
 class ExtendsStatementNode;
 class BlockStatementNode;
 class SetStatementNode;
+class MacroStatementNode;
+class MacroCallNode;
 
 class NodeVisitor {
 public:
@@ -417,6 +421,8 @@ public:
   virtual void visit(const ExtendsStatementNode& node) = 0;
   virtual void visit(const BlockStatementNode& node) = 0;
   virtual void visit(const SetStatementNode& node) = 0;
+  virtual void visit(const MacroStatementNode& node) = 0;
+  virtual void visit(const MacroCallNode& node) = 0;
 };
 
 /*!
@@ -736,6 +742,46 @@ public:
   }
 };
 
+struct MacroParameter {
+  // cppcheck-suppress unusedStructMember
+  std::string name;
+  std::shared_ptr<ExpressionNode> default_value;
+};
+
+class MacroStatementNode : public StatementNode {
+public:
+  const std::string name;
+  // cppcheck-suppress unusedStructMember
+  std::vector<MacroParameter> parameters;
+  // cppcheck-suppress unusedStructMember
+  BlockNode body;
+  BlockNode* const parent;
+  // Holds the source content the macro body references via TextNode offsets.
+  // Stored as shared_ptr so it stays alive even when the originally parsed
+  // Template is copied or destroyed (e.g. when added via include_template).
+  std::shared_ptr<Template> owner_template;
+
+  explicit MacroStatementNode(BlockNode* const parent, const std::string& name, size_t pos): StatementNode(pos), name(name), parent(parent) {}
+
+  void accept(NodeVisitor& v) const override {
+    v.visit(*this);
+  }
+};
+
+class MacroCallNode : public ExpressionNode {
+public:
+  const std::string name;
+  std::vector<std::shared_ptr<ExpressionNode>> arguments;
+  std::shared_ptr<MacroStatementNode> macro;
+
+  explicit MacroCallNode(const std::string& name, std::shared_ptr<MacroStatementNode> macro, size_t pos)
+      : ExpressionNode(pos), name(name), macro(std::move(macro)) {}
+
+  void accept(NodeVisitor& v) const override {
+    v.visit(*this);
+  }
+};
+
 } // namespace inja
 
 #endif // INCLUDE_INJA_NODE_HPP_
@@ -806,6 +852,14 @@ class StatisticsVisitor : public NodeVisitor {
 
   void visit(const SetStatementNode&) override {}
 
+  void visit(const MacroStatementNode&) override {}
+
+  void visit(const MacroCallNode& node) override {
+    for (const auto& a : node.arguments) {
+      a->accept(*this);
+    }
+  }
+
 public:
   size_t variable_counter {0};
 
@@ -826,6 +880,8 @@ struct Template {
   BlockNode root;
   std::string content;
   std::map<std::string, std::shared_ptr<BlockStatementNode>> block_storage;
+  // cppcheck-suppress unusedStructMember
+  std::map<std::string, std::shared_ptr<MacroStatementNode>> macro_storage;
 
   explicit Template() {}
   explicit Template(std::string content): content(std::move(content)) {}
@@ -1494,9 +1550,14 @@ class Parser {
   BlockNode* current_block {nullptr};
   ExpressionListNode* current_expression_list {nullptr};
 
+  // Holds a copy of the current template's content for macros to reference.
+  // Created lazily on the first macro definition in the current parse.
+  std::shared_ptr<Template> current_macro_owner;
+
   std::stack<IfStatementNode*> if_statement_stack;
   std::stack<ForStatementNode*> for_statement_stack;
   std::stack<BlockStatementNode*> block_statement_stack;
+  std::stack<MacroStatementNode*> macro_statement_stack;
 
   void throw_parser_error(const std::string& message) const {
     INJA_THROW(ParserError(message, lexer.current_position()));
@@ -1664,7 +1725,9 @@ class Parser {
 
           // Functions
         } else if (peek_tok.kind == Token::Kind::LeftParen) {
-          auto func = std::make_shared<FunctionNode>(tok.text, tok.text.data() - tmpl.content.c_str());
+          const std::string call_name = static_cast<std::string>(tok.text);
+          const size_t call_pos = tok.text.data() - tmpl.content.c_str();
+          auto func = std::make_shared<FunctionNode>(tok.text, call_pos);
           get_next_token();
           do {
             get_next_token();
@@ -1681,6 +1744,14 @@ class Parser {
 
           auto function_data = function_storage.find_function(func->name, func->number_args);
           if (function_data.operation == FunctionStorage::Operation::None) {
+            // Try macro lookup before failing
+            auto macro_it = tmpl.macro_storage.find(call_name);
+            if (macro_it != tmpl.macro_storage.end()) {
+              auto macro_call = std::make_shared<MacroCallNode>(call_name, macro_it->second, call_pos);
+              macro_call->arguments = std::move(func->arguments);
+              arguments.emplace_back(macro_call);
+              break;
+            }
             throw_parser_error("unknown function " + func->name);
           }
           func->operation = function_data.operation;
@@ -1833,6 +1904,13 @@ class Parser {
         // search store for defined function with such name and number of args
         auto function_data = function_storage.find_function(func->name, func->number_args);
         if (function_data.operation == FunctionStorage::Operation::None) {
+          auto macro_it = tmpl.macro_storage.find(func->name);
+          if (macro_it != tmpl.macro_storage.end()) {
+            auto macro_call = std::make_shared<MacroCallNode>(func->name, macro_it->second, func->pos);
+            macro_call->arguments = std::move(func->arguments);
+            arguments.emplace_back(macro_call);
+            break;
+          }
           throw_parser_error("unknown function " + func->name);
         }
         func->operation = function_data.operation;
@@ -2009,6 +2087,15 @@ class Parser {
       std::string template_name = parse_filename();
       add_to_template_storage(path, template_name);
 
+      // Hoist macros defined in the included template so they can be called
+      // in the including template after this statement.
+      const auto included_it = template_storage.find(template_name);
+      if (included_it != template_storage.end()) {
+        for (const auto& macro_pair : included_it->second.macro_storage) {
+          tmpl.macro_storage.emplace(macro_pair.first, macro_pair.second);
+        }
+      }
+
       current_block->nodes.emplace_back(std::make_shared<IncludeStatementNode>(template_name, tok.text.data() - tmpl.content.c_str()));
 
       get_next_token();
@@ -2043,6 +2130,75 @@ class Parser {
       if (!parse_expression(tmpl, closing)) {
         return false;
       }
+    } else if (tok.text == static_cast<decltype(tok.text)>("macro")) {
+      get_next_token();
+
+      if (tok.kind != Token::Kind::Id) {
+        throw_parser_error("expected macro name, got '" + tok.describe() + "'");
+      }
+      const std::string macro_name = static_cast<std::string>(tok.text);
+      const size_t macro_pos = tok.text.data() - tmpl.content.c_str();
+      get_next_token();
+
+      if (tok.kind != Token::Kind::LeftParen) {
+        throw_parser_error("expected '(' after macro name, got '" + tok.describe() + "'");
+      }
+      get_next_token();
+
+      auto macro_node = std::make_shared<MacroStatementNode>(current_block, macro_name, macro_pos);
+      if (!current_macro_owner) {
+        current_macro_owner = std::make_shared<Template>(tmpl.content);
+      }
+      macro_node->owner_template = current_macro_owner;
+
+      // Parse parameter list: name1, name2 = expr, name3 ...
+      bool seen_default = false;
+      while (tok.kind != Token::Kind::RightParen) {
+        if (tok.kind != Token::Kind::Id) {
+          throw_parser_error("expected parameter name, got '" + tok.describe() + "'");
+        }
+        MacroParameter param;
+        param.name = static_cast<std::string>(tok.text);
+        get_next_token();
+
+        if (tok.text == static_cast<decltype(tok.text)>("=")) {
+          get_next_token();
+          param.default_value = parse_expression(tmpl);
+          if (!param.default_value) {
+            throw_parser_error("expected expression for default value");
+          }
+          seen_default = true;
+        } else if (seen_default) {
+          throw_parser_error("parameter without default follows parameter with default");
+        }
+
+        macro_node->parameters.emplace_back(std::move(param));
+
+        if (tok.kind == Token::Kind::Comma) {
+          get_next_token();
+        } else if (tok.kind != Token::Kind::RightParen) {
+          throw_parser_error("expected ',' or ')' in parameter list, got '" + tok.describe() + "'");
+        }
+      }
+      get_next_token();
+
+      current_block->nodes.emplace_back(macro_node);
+      auto success = tmpl.macro_storage.emplace(macro_name, macro_node);
+      if (!success.second) {
+        throw_parser_error("macro with the name '" + macro_name + "' does already exist");
+      }
+      macro_statement_stack.emplace(macro_node.get());
+      current_block = &macro_node->body;
+    } else if (tok.text == static_cast<decltype(tok.text)>("endmacro")) {
+      if (macro_statement_stack.empty()) {
+        throw_parser_error("endmacro without matching macro");
+      }
+
+      auto& macro_statement_data = macro_statement_stack.top();
+      get_next_token();
+
+      current_block = macro_statement_data->parent;
+      macro_statement_stack.pop();
     } else {
       return false;
     }
@@ -2062,6 +2218,9 @@ class Parser {
         }
         if (!for_statement_stack.empty()) {
           throw_parser_error("unmatched for");
+        }
+        if (!macro_statement_stack.empty()) {
+          throw_parser_error("unmatched macro");
         }
       }
         current_block = nullptr;
@@ -2803,6 +2962,92 @@ class Renderer : public NodeVisitor {
     replace_substring(ptr, ".", "/");
     ptr = "/" + ptr;
     additional_data[json::json_pointer(ptr)] = *eval_expression_list(node.expression);
+  }
+
+  void visit(const MacroStatementNode&) override {
+    // Macro definitions are registered at parse time; no runtime effect here.
+  }
+
+  void visit(const MacroCallNode& node) override {
+    const auto& macro = *node.macro;
+
+    // 1. Evaluate arguments in the caller's scope and copy values out so that
+    //    swapping additional_data below cannot invalidate pointers.
+    std::vector<json> arg_values;
+    arg_values.reserve(node.arguments.size());
+    for (const auto& arg : node.arguments) {
+      arg->accept(*this);
+      const json* p = data_eval_stack.top();
+      data_eval_stack.pop();
+      if (p) {
+        arg_values.emplace_back(*p);
+      } else {
+        const auto data_node = not_found_stack.top();
+        not_found_stack.pop();
+        throw_renderer_error("variable '" + data_node->name + "' not found", *data_node);
+      }
+    }
+
+    if (arg_values.size() > macro.parameters.size()) {
+      throw_renderer_error("too many arguments for macro '" + macro.name + "'", node);
+    }
+
+    // 2. Save caller context.
+    json saved_additional = std::move(additional_data);
+    json* saved_loop = current_loop_data;
+    auto* saved_template = current_template;
+    auto* saved_stream = output_stream;
+
+    // 3. Create fresh local scope (parameters + input data only).
+    additional_data = json::object();
+    current_loop_data = &additional_data["loop"];
+
+    // 4. Bind parameters: positional args first, defaults for the rest.
+    for (size_t i = 0; i < macro.parameters.size(); ++i) {
+      const auto& param = macro.parameters[i];
+      if (i < arg_values.size()) {
+        additional_data[param.name] = std::move(arg_values[i]);
+      } else if (param.default_value) {
+        param.default_value->accept(*this);
+        const json* p = data_eval_stack.top();
+        data_eval_stack.pop();
+        if (p) {
+          additional_data[param.name] = *p;
+        } else {
+          const auto data_node = not_found_stack.top();
+          not_found_stack.pop();
+          throw_renderer_error("variable '" + data_node->name + "' not found", *data_node);
+        }
+      } else {
+        // Restore before throwing so caller sees a clean state.
+        additional_data = std::move(saved_additional);
+        current_loop_data = saved_loop;
+        throw_renderer_error("missing required argument '" + param.name + "' for macro '" + macro.name + "'", node);
+      }
+    }
+
+    // 5. Switch current_template so TextNode and error locations resolve
+    //    against the source content the macro body references (matters when
+    //    the macro was hoisted from an included template or registered via
+    //    include_template, where the originally parsed Template may be gone).
+    current_template = macro.owner_template.get();
+    template_stack.emplace_back(current_template);
+
+    // 6. Capture body output into a temporary stream.
+    std::ostringstream captured;
+    output_stream = &captured;
+
+    macro.body.accept(*this);
+
+    // 7. Restore.
+    output_stream = saved_stream;
+    template_stack.pop_back();
+    current_template = saved_template;
+    additional_data = std::move(saved_additional);
+    current_loop_data = saved_loop;
+
+    // 8. Push captured output as the call result.
+    make_result(json(captured.str()));
   }
 
 public:

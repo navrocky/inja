@@ -323,6 +323,54 @@ env.add_void_callback("log", 1, [greet](Arguments args) {
 env.render("{{ log(neighbour) }}", data); // Prints nothing to result, only to cout...
 ```
 
+### Macros
+
+Macros let you define a reusable chunk of template that takes parameters and is called like a function. They are similar in spirit to Jinja2 macros. A macro is defined with `{% macro name(params) %}...{% endmacro %}` and called with `{{ name(args) }}`.
+
+```.cpp
+// Define a macro and use it
+env.render(R"({% macro greet(name) %}Hello {{ name }}!{% endmacro %}{{ greet("world") }})", data);
+// "Hello world!"
+```
+
+Parameters may have default values, which are used when the call omits the corresponding positional argument:
+```.cpp
+env.render(R"(
+{% macro link(href, label="click me") %}<a href="{{ href }}">{{ label }}</a>{% endmacro -%}
+{{ link("/home") }}
+{{ link("/about", "About") }}
+)", data);
+// <a href="/home">click me</a>
+// <a href="/about">About</a>
+```
+
+Macros have an isolated local scope: they see only their own parameters and the global input data, *not* `set` variables, loop variables, or other local state of the calling template. Parameters never leak back to the caller.
+
+```.cpp
+// Outer set variable is NOT visible inside the macro.
+env.render(R"({% set city = "Brno" %}{% macro m() %}{{ city }}{% endmacro %}{{ m() }})", data);
+// throws inja::RenderError: variable 'city' not found
+```
+
+Macros may call other macros and may also call themselves recursively:
+```.cpp
+env.render(R"(
+{%- macro down(n) -%}
+  {%- if n > 0 -%}{{ n }},{{ down(n - 1) }}{%- endif -%}
+{%- endmacro -%}
+{{ down(3) }}
+)", data); // "3,2,1,"
+```
+
+Macros defined in an included template are automatically *hoisted* into the including template's namespace, so they can be called after the `{% include %}` statement:
+```.cpp
+// macros.tpl: {% macro greet(n) %}Hi {{ n }}{% endmacro %}
+env.include_template("macros.tpl", env.parse("{% macro greet(n) %}Hi {{ n }}{% endmacro %}"));
+env.render(R"({% include "macros.tpl" %}{{ greet("Bob") }})", data); // "Hi Bob"
+```
+
+If a macro is called without a value for a parameter that has no default, an `inja::RenderError` is thrown. Defining two macros with the same name in one template, or leaving a `{% macro %}` without a matching `{% endmacro %}`, raises an `inja::ParserError`.
+
 ### Template Inheritance
 
 Template inheritance allows you to build a base *skeleton* template that contains all the common elements and defines blocks that child templates can override. Lets show an example: The base template

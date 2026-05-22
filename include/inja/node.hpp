@@ -14,6 +14,8 @@
 
 namespace inja {
 
+struct Template;
+
 class NodeVisitor;
 class BlockNode;
 class TextNode;
@@ -31,6 +33,8 @@ class IncludeStatementNode;
 class ExtendsStatementNode;
 class BlockStatementNode;
 class SetStatementNode;
+class MacroStatementNode;
+class MacroCallNode;
 
 class NodeVisitor {
 public:
@@ -52,6 +56,8 @@ public:
   virtual void visit(const ExtendsStatementNode& node) = 0;
   virtual void visit(const BlockStatementNode& node) = 0;
   virtual void visit(const SetStatementNode& node) = 0;
+  virtual void visit(const MacroStatementNode& node) = 0;
+  virtual void visit(const MacroCallNode& node) = 0;
 };
 
 /*!
@@ -365,6 +371,46 @@ public:
   ExpressionListNode expression;
 
   explicit SetStatementNode(const std::string& key, size_t pos): StatementNode(pos), key(key) {}
+
+  void accept(NodeVisitor& v) const override {
+    v.visit(*this);
+  }
+};
+
+struct MacroParameter {
+  // cppcheck-suppress unusedStructMember
+  std::string name;
+  std::shared_ptr<ExpressionNode> default_value;
+};
+
+class MacroStatementNode : public StatementNode {
+public:
+  const std::string name;
+  // cppcheck-suppress unusedStructMember
+  std::vector<MacroParameter> parameters;
+  // cppcheck-suppress unusedStructMember
+  BlockNode body;
+  BlockNode* const parent;
+  // Holds the source content the macro body references via TextNode offsets.
+  // Stored as shared_ptr so it stays alive even when the originally parsed
+  // Template is copied or destroyed (e.g. when added via include_template).
+  std::shared_ptr<Template> owner_template;
+
+  explicit MacroStatementNode(BlockNode* const parent, const std::string& name, size_t pos): StatementNode(pos), name(name), parent(parent) {}
+
+  void accept(NodeVisitor& v) const override {
+    v.visit(*this);
+  }
+};
+
+class MacroCallNode : public ExpressionNode {
+public:
+  const std::string name;
+  std::vector<std::shared_ptr<ExpressionNode>> arguments;
+  std::shared_ptr<MacroStatementNode> macro;
+
+  explicit MacroCallNode(const std::string& name, std::shared_ptr<MacroStatementNode> macro, size_t pos)
+      : ExpressionNode(pos), name(name), macro(std::move(macro)) {}
 
   void accept(NodeVisitor& v) const override {
     v.visit(*this);

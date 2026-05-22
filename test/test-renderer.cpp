@@ -133,6 +133,39 @@ TEST_CASE("types") {
     CHECK(env.render("{{brother.name}}", data) == "Chris");
   }
 
+  SUBCASE("macros") {
+    CHECK(env.render("{% macro hello(n) %}Hi {{ n }}!{% endmacro %}{{ hello(\"Bob\") }}", data) == "Hi Bob!");
+    CHECK(env.render("{% macro add(a, b) %}{{ a + b }}{% endmacro %}{{ add(2, 3) }}", data) == "5");
+    CHECK(env.render("{% macro greet(n, g=\"Hello\") %}{{ g }}, {{ n }}!{% endmacro %}{{ greet(\"Bob\") }}", data) == "Hello, Bob!");
+    CHECK(env.render("{% macro greet(n, g=\"Hello\") %}{{ g }}, {{ n }}!{% endmacro %}{{ greet(\"Bob\", \"Hey\") }}", data) == "Hey, Bob!");
+    // Input data is visible inside the macro body.
+    CHECK(env.render("{% macro who() %}{{ name }}{% endmacro %}{{ who() }}", data) == "Peter");
+    // Local set variable from outside the macro is NOT visible.
+    CHECK_THROWS_WITH(env.render("{% set x=1 %}{% macro m() %}{{ x }}{% endmacro %}{{ m() }}", data),
+                      doctest::Contains("variable 'x' not found"));
+    // Parameters do not leak out of the macro.
+    CHECK_THROWS_WITH(env.render("{% macro m(x) %}{{ x }}{% endmacro %}{{ m(5) }} {{ x }}", data),
+                      doctest::Contains("variable 'x' not found"));
+    // Macro used inside a for-loop sees the loop value via parameter binding.
+    CHECK(env.render("{% macro li(x) %}<li>{{ x }}</li>{% endmacro %}{% for n in [1,2] %}{{ li(n) }}{% endfor %}", data) ==
+          "<li>1</li><li>2</li>");
+    // Macro calling another macro.
+    CHECK(env.render("{% macro a(x) %}A({{ x }}){% endmacro %}{% macro b(x) %}B[{{ a(x) }}]{% endmacro %}{{ b(\"y\") }}", data) == "B[A(y)]");
+    // Recursive macro.
+    CHECK(env.render("{% macro down(n) %}{% if n > 0 %}{{ n }},{{ down(n - 1) }}{% endif %}{% endmacro %}{{ down(3) }}", data) == "3,2,1,");
+    // Macro defined in an included template.
+    {
+      inja::Environment env2;
+      env2.include_template("macros.tpl", env2.parse("{% macro greet(n) %}Hi {{ n }}{% endmacro %}"));
+      CHECK(env2.render("{% include \"macros.tpl\" %}{{ greet(\"Bob\") }}", data) == "Hi Bob");
+    }
+    // Errors.
+    CHECK_THROWS_WITH(env.render("{% macro m(a, b) %}x{% endmacro %}{{ m(1) }}", data),
+                      doctest::Contains("missing required argument 'b' for macro 'm'"));
+    CHECK_THROWS_WITH(env.parse("{% macro m() %}x"), doctest::Contains("unmatched macro"));
+    CHECK_THROWS_WITH(env.parse("{% endmacro %}"), doctest::Contains("endmacro without matching macro"));
+  }
+
   SUBCASE("short circuit evaluation") {
     CHECK(env.render("{% if 0 and undefined %}do{% else %}nothing{% endif %}", data) == "nothing");
     CHECK_THROWS_WITH(env.render("{% if 1 and undefined %}do{% else %}nothing{% endif %}", data),
