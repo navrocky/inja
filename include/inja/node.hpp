@@ -36,6 +36,8 @@ class BlockStatementNode;
 class SetStatementNode;
 class MacroStatementNode;
 class MacroCallNode;
+class FilterStatementNode;
+class FilterContentNode;
 
 class NodeVisitor {
 public:
@@ -60,6 +62,8 @@ public:
   virtual void visit(const SetStatementNode& node) = 0;
   virtual void visit(const MacroStatementNode& node) = 0;
   virtual void visit(const MacroCallNode& node) = 0;
+  virtual void visit(const FilterStatementNode& node) = 0;
+  virtual void visit(const FilterContentNode& node) = 0;
 };
 
 /*!
@@ -146,6 +150,15 @@ public:
   }
 
   explicit DataNode(std::string_view ptr_name, size_t pos): ExpressionNode(pos), name(ptr_name), ptr(json::json_pointer(convert_dot_to_ptr(ptr_name))) {}
+
+  void accept(NodeVisitor& v) const override {
+    v.visit(*this);
+  }
+};
+
+class FilterContentNode : public ExpressionNode {
+public:
+  explicit FilterContentNode(size_t pos): ExpressionNode(pos) {}
 
   void accept(NodeVisitor& v) const override {
     v.visit(*this);
@@ -425,6 +438,19 @@ public:
 
   explicit MacroCallNode(const std::string& name, std::shared_ptr<MacroStatementNode> macro, size_t pos)
       : ExpressionNode(pos), name(name), macro(std::move(macro)) {}
+
+  void accept(NodeVisitor& v) const override {
+    v.visit(*this);
+  }
+};
+
+class FilterStatementNode : public StatementNode {
+public:
+  ExpressionListNode filter_expression;
+  BlockNode body;
+  BlockNode* const parent;
+
+  explicit FilterStatementNode(BlockNode* const parent, size_t pos): StatementNode(pos), parent(parent) {}
 
   void accept(NodeVisitor& v) const override {
     v.visit(*this);

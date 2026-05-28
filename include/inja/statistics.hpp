@@ -76,6 +76,13 @@ class StatisticsVisitor : public NodeVisitor {
     }
   }
 
+  void visit(const FilterStatementNode& node) override {
+    node.filter_expression.accept(*this);
+    node.body.accept(*this);
+  }
+
+  void visit(const FilterContentNode&) override {}
+
 public:
   size_t variable_counter {0};
 
