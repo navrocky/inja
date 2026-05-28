@@ -11,3 +11,4 @@ examples
 
 __pycache__
 /CMakeLists.txt.user
+.qtcreator/CMakeLists.txt.user
