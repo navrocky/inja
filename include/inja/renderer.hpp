@@ -850,3 +850,4 @@ public:
 } // namespace inja
 
 #endif // INCLUDE_INJA_RENDERER_HPP_
+

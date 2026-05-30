@@ -87,8 +87,7 @@ private:
   std::map<std::pair<std::string, int>, FunctionData> function_storage = {
       {std::make_pair("at", 2), FunctionData {Operation::At}},
       {std::make_pair("capitalize", 1), FunctionData {Operation::Capitalize}},
-      {std::make_pair("center", 1), FunctionData {Operation::Center}},
-      {std::make_pair("center", 2), FunctionData {Operation::Center}},
+      {std::make_pair("center", VARIADIC), FunctionData {Operation::Center}},
       {std::make_pair("default", 2), FunctionData {Operation::Default}},
       {std::make_pair("divisibleBy", 2), FunctionData {Operation::DivisibleBy}},
       {std::make_pair("even", 1), FunctionData {Operation::Even}},
@@ -96,10 +95,7 @@ private:
       {std::make_pair("existsIn", 2), FunctionData {Operation::ExistsInObject}},
       {std::make_pair("first", 1), FunctionData {Operation::First}},
       {std::make_pair("float", 1), FunctionData {Operation::Float}},
-      {std::make_pair("indent", 1), FunctionData {Operation::Indent}},
-      {std::make_pair("indent", 2), FunctionData {Operation::Indent}},
-      {std::make_pair("indent", 3), FunctionData {Operation::Indent}},
-      {std::make_pair("indent", 4), FunctionData {Operation::Indent}},
+      {std::make_pair("indent", VARIADIC), FunctionData {Operation::Indent}},
       {std::make_pair("int", 1), FunctionData {Operation::Int}},
       {std::make_pair("isArray", 1), FunctionData {Operation::IsArray}},
       {std::make_pair("isBoolean", 1), FunctionData {Operation::IsBoolean}},
@@ -153,3 +149,4 @@ public:
 } // namespace inja
 
 #endif // INCLUDE_INJA_FUNCTION_STORAGE_HPP_
+

@@ -383,3 +383,4 @@ $$ endif
     CHECK(env.render(string_template, data) == "Hello Peter\n    You really are Peter\n");
   }
 }
+

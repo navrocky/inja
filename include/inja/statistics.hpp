@@ -92,3 +92,4 @@ public:
 } // namespace inja
 
 #endif // INCLUDE_INJA_STATISTICS_HPP_
+

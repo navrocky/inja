@@ -460,3 +460,4 @@ public:
 } // namespace inja
 
 #endif // INCLUDE_INJA_NODE_HPP_
+

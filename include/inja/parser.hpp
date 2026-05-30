@@ -877,3 +877,4 @@ public:
 } // namespace inja
 
 #endif // INCLUDE_INJA_PARSER_HPP_
+
