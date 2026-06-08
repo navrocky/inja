@@ -159,6 +159,15 @@ TEST_CASE("types") {
       env2.include_template("macros.tpl", env2.parse("{% macro greet(n) %}Hi {{ n }}{% endmacro %}"));
       CHECK(env2.render("{% include \"macros.tpl\" %}{{ greet(\"Bob\") }}", data) == "Hi Bob");
     }
+    // A single trailing newline before endmacro is trimmed so line-statement
+    // style definitions don't introduce an unexpected trailing newline.
+    CHECK(env.render("## macro foo()\ntest\n## endmacro\n[{{ foo() }}]", data) == "[test]");
+    CHECK(env.render("## macro foo()\ntest\r\n## endmacro\n[{{ foo() }}]", data) == "[test]");
+    CHECK(env.render("## macro foo()\na\nb\n## endmacro\n[{{ foo() }}]", data) == "[a\nb]");
+    // Only the final newline is removed.
+    CHECK(env.render("## macro foo()\n\n## endmacro\n[{{ foo() }}]", data) == "[]");
+    // Inline definitions without a trailing newline are unaffected.
+    CHECK(env.render("{% macro foo() %}test{% endmacro %}[{{ foo() }}]", data) == "[test]");
     // Errors.
     CHECK_THROWS_WITH(env.render("{% macro m(a, b) %}x{% endmacro %}{{ m(1) }}", data),
                       doctest::Contains("missing required argument 'b' for macro 'm'"));
