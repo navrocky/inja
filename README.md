@@ -371,6 +371,17 @@ env.render(R"({% include "macros.tpl" %}{{ greet("Bob") }})", data); // "Hi Bob"
 
 If a macro is called without a value for a parameter that has no default, an `inja::RenderError` is thrown. Defining two macros with the same name in one template, or leaving a `{% macro %}` without a matching `{% endmacro %}`, raises an `inja::ParserError`.
 
+Macro calls nested more than `RenderConfig::max_macro_recursion_depth` deep (200 by default,
+configurable via `Environment::set_max_macro_recursion_depth`) throw an `inja::RenderError` naming
+the offending macro, instead of exhausting the C++ call stack - this guards against a runaway
+recursive macro that never hits its base case:
+
+```.cpp
+// No base case - throws instead of crashing the process.
+env.render(R"({% macro loop(n) %}{{ n }},{{ loop(n + 1) }}{% endmacro %}{{ loop(1) }})", data);
+// throws inja::RenderError: macro recursion depth exceeded 200 while calling macro 'loop'
+```
+
 ### Template Inheritance
 
 Template inheritance allows you to build a base *skeleton* template that contains all the common elements and defines blocks that child templates can override. Lets show an example: The base template
