@@ -434,10 +434,14 @@ class MacroCallNode : public ExpressionNode {
 public:
   const std::string name;
   std::vector<std::shared_ptr<ExpressionNode>> arguments;
-  std::shared_ptr<MacroStatementNode> macro;
+  // Weak: the macro's owning Template (its macro_storage / root BlockNode) already keeps the
+  // MacroStatementNode alive for as long as it can be called. A shared_ptr here would create a
+  // reference cycle for a (self- or mutually-) recursive macro, since its own body contains this
+  // MacroCallNode, which would then keep the MacroStatementNode that owns that body alive forever.
+  std::weak_ptr<MacroStatementNode> macro;
 
-  explicit MacroCallNode(const std::string& name, std::shared_ptr<MacroStatementNode> macro, size_t pos)
-      : ExpressionNode(pos), name(name), macro(std::move(macro)) {}
+  explicit MacroCallNode(const std::string& name, const std::shared_ptr<MacroStatementNode>& macro, size_t pos)
+      : ExpressionNode(pos), name(name), macro(macro) {}
 
   void accept(NodeVisitor& v) const override {
     v.visit(*this);

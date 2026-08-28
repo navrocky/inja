@@ -62,6 +62,10 @@ class Renderer : public NodeVisitor {
   const json* data_input;
   std::ostream* output_stream;
 
+  // Nesting depth of in-flight macro calls; guards against runaway recursion (missing base case,
+  // inverted condition, etc.) blowing the C++ call stack. See visit(const MacroCallNode&).
+  size_t macro_call_depth {0};
+
   json additional_data;
   json* current_loop_data = &additional_data["loop"];
 
@@ -734,7 +738,23 @@ class Renderer : public NodeVisitor {
   }
 
   void visit(const MacroCallNode& node) override {
-    const auto& macro = *node.macro;
+    if (macro_call_depth >= config.max_macro_recursion_depth) {
+      throw_renderer_error("macro recursion depth exceeded " + std::to_string(config.max_macro_recursion_depth) + " while calling macro '" + node.name + "'", node);
+    }
+
+    const auto macro_ptr = node.macro.lock();
+    if (!macro_ptr) {
+      throw_renderer_error("macro '" + node.name + "' is no longer available", node);
+    }
+    const auto& macro = *macro_ptr;
+
+    // Counts for the whole body of this function, including argument/default-value evaluation
+    // below (which may itself contain nested macro calls), not just the macro.body.accept() call.
+    ++macro_call_depth;
+    struct DepthGuard {
+      size_t& depth;
+      ~DepthGuard() { --depth; }
+    } depth_guard {macro_call_depth};
 
     // 1. Evaluate arguments in the caller's scope and copy values out so that
     //    swapping additional_data below cannot invalidate pointers.

@@ -171,8 +171,25 @@ TEST_CASE("types") {
     // Errors.
     CHECK_THROWS_WITH(env.render("{% macro m(a, b) %}x{% endmacro %}{{ m(1) }}", data),
                       doctest::Contains("missing required argument 'b' for macro 'm'"));
+    CHECK_THROWS_WITH(env.render("{% macro m(a) %}x{% endmacro %}{{ m(1, 2) }}", data),
+                      doctest::Contains("too many arguments for macro 'm'"));
+    CHECK_THROWS_WITH(env.parse("{% macro m() %}x{% endmacro %}{% macro m() %}y{% endmacro %}"),
+                      doctest::Contains("macro with the name 'm' does already exist"));
     CHECK_THROWS_WITH(env.parse("{% macro m() %}x"), doctest::Contains("unmatched macro"));
     CHECK_THROWS_WITH(env.parse("{% endmacro %}"), doctest::Contains("endmacro without matching macro"));
+
+    // Runaway recursion (no base case) throws a RenderError instead of exhausting the C++ stack.
+    CHECK_THROWS_WITH(env.render("{% macro loop(n) %}{{ n }},{{ loop(n + 1) }}{% endmacro %}{{ loop(1) }}", data),
+                      doctest::Contains("macro recursion depth exceeded"));
+
+    // The recursion depth limit is configurable and enforced even for otherwise-legitimate depth.
+    {
+      inja::Environment env3;
+      env3.set_max_macro_recursion_depth(3);
+      CHECK(env3.render("{% macro down(n) %}{% if n > 0 %}{{ n }},{{ down(n - 1) }}{% endif %}{% endmacro %}{{ down(2) }}", data) == "2,1,");
+      CHECK_THROWS_WITH(env3.render("{% macro down(n) %}{% if n > 0 %}{{ n }},{{ down(n - 1) }}{% endif %}{% endmacro %}{{ down(5) }}", data),
+                        doctest::Contains("macro recursion depth exceeded"));
+    }
   }
 
   SUBCASE("short circuit evaluation") {
